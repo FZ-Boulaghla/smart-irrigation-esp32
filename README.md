@@ -39,10 +39,15 @@ An LCD screen displays real-time data locally.
 Install the required libraries in Arduino IDE:
 
 -WiFi.h
+
 -WebServer.h
+
 -LiquidCrystal_I2C.h
+
 -ArduinoJson.h
 
 Upload the code to your ESP32.
+
 Connect to the IP address shown on the LCD screen.
+
 Use Postman or another HTTP client to interact with the endpoints.
