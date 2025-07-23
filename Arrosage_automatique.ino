@@ -2,12 +2,18 @@
 #include <WebServer.h>
 #include <LiquidCrystal_I2C.h>
 #include <ArduinoJson.h>
+#include <time.h>
 
 #define RELAY_PIN 4
 #define SENSOR_PIN 33
 
 const char* ssid = "";
 const char* password = "";
+
+// NTP
+const char* ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = 3600;          // Maroc = UTC+1
+const int daylightOffset_sec = 0;
 
 WebServer server(80);
 LiquidCrystal_I2C lcd(0x27, 16, 2);
@@ -23,8 +29,8 @@ void handlePumpControl() {
   StaticJsonDocument<200> doc;
   DeserializationError error = deserializeJson(doc, body);
 
-  if (error) {
-    server.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+  if (error || !doc.containsKey("state") || !doc["state"].is<bool>()) {
+    server.send(400, "application/json", "{\"error\":\"Invalid or missing 'state' boolean\"}");
     return;
   }
 
@@ -33,12 +39,12 @@ void handlePumpControl() {
   if (turnOn) {
     digitalWrite(RELAY_PIN, LOW);
     lcd.setCursor(0, 1);
-    lcd.print("Motor is ON ");
+    lcd.print("Pump: ON       ");
     server.send(200, "application/json", "{\"status\": \"Pump ON\"}");
   } else {
     digitalWrite(RELAY_PIN, HIGH);
     lcd.setCursor(0, 1);
-    lcd.print("Motor is OFF");
+    lcd.print("Pump: OFF      ");
     server.send(200, "application/json", "{\"status\": \"Pump OFF\"}");
   }
 }
@@ -47,25 +53,33 @@ void handlePumpControl() {
 void handleSoilMoisture() {
   int value = analogRead(SENSOR_PIN);
   value = map(value, 0, 4095, 0, 100);
-  value = (value - 100) * -1;  // Inverser pour afficher "humide" = 100%
+  value = (value - 100) * -1;
 
   String json = "{\"moisture\": " + String(value) + "}";
-  lcd.setCursor(0, 0);
-  lcd.print("Moisture: ");
-  lcd.print(value);
-  lcd.print("%   ");
   server.send(200, "application/json", json);
+}
+
+// --- Initialisation NTP ---
+void setupTime() {
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+
+  struct tm timeinfo;
+  while (!getLocalTime(&timeinfo)) {
+    Serial.println("Waiting for NTP...");
+    delay(1000);
+  }
+  Serial.println("Time synchronized");
 }
 
 void setup() {
   Serial.begin(115200);
   pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, HIGH); // Pompe éteinte au début
+  digitalWrite(RELAY_PIN, HIGH); // Pompe OFF
 
   lcd.init();
   lcd.backlight();
   lcd.setCursor(0, 0);
-  lcd.print("Connecting...");
+  lcd.print("Connecting WiFi");
 
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
@@ -73,36 +87,50 @@ void setup() {
     Serial.println("Connexion au WiFi...");
   }
 
-  Serial.println(WiFi.localIP());
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("IP:");
   lcd.setCursor(0, 1);
   lcd.print(WiFi.localIP());
+  Serial.println(WiFi.localIP());
 
-  // Routes HTTP REST
+  setupTime();
+
   server.on("/api/pump", HTTP_POST, handlePumpControl);
   server.on("/api/soilMoisture", HTTP_GET, handleSoilMoisture);
-
   server.begin();
 }
 
 void loop() {
   server.handleClient();
 
-  // Affichage régulier de l’humidité sur le LCD (toutes les 5 secondes)
   static unsigned long lastUpdate = 0;
   unsigned long now = millis();
 
   if (now - lastUpdate > 5000) {
+    // Affichage humidité
     int value = analogRead(SENSOR_PIN);
     value = map(value, 0, 4095, 0, 100);
     value = (value - 100) * -1;
 
-    lcd.setCursor(0, 0);
-    lcd.print("Moisture: ");
+    // Heure actuelle
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo)) {
+      char timeStr[17];
+      strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
+
+      lcd.setCursor(0, 0);
+      lcd.print(timeStr);          // Affiche l'heure sur ligne 0
+    } else {
+      lcd.setCursor(0, 0);
+      lcd.print("Time error     ");
+    }
+
+    // Affichage humidité ligne 1
+    lcd.setCursor(8, 0);
+    lcd.print("H:");
     lcd.print(value);
-    lcd.print("%   "); // Nettoie les vieux chiffres
+    lcd.print("% ");
 
     lastUpdate = now;
   }
